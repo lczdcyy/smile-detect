@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh‑CN">
+<head>
+<meta charset="UTF‑8">
+<meta name="viewport" content="width=device‑width, initial‑scale=1.0"/>
+<title>实时摄像头笑脸检测｜复刻实验3</title>
+<script src="https://cdn.jsdelivr.net/npm/opencv.js@4.8.0/opencv.min.js"></script>
+<style>
+*{margin:0;padding:0;box‑sizing:border‑box;font‑family:system‑ui}
+body{padding:14px;max‑width:720px;margin:0 auto;background:#f4f4f4}
+h2{text‑align:center;font‑size:18px;margin‑bottom:12px;color:#222}
+#tip{font‑size:14px;color:#555;margin‑bottom:10px}
+#videoInput{display:none}
+#canvasOutput{width:100%;border:1px solid #aaa;border‑radius:8px;background:#000}
+</style>
+</head>
+<body>
+<h2>摄像头实时人脸笑脸检测</h2>
+<div id="tip">正在加载OpenCV，请稍候……</div>
+<video id="videoInput" autoplay playsinline muted></video>
+<canvas id="canvasOutput"></canvas>
+
+<script>
+let cvReady = false;
+let streaming = false;
+let faceCascade, smileCascade;
+
+cv.onRuntimeInitialized = async ()=>{
+    cvReady = true;
+    document.getElementById("tip").innerText = "✅加载完成，正在拉起摄像头权限，请允许相机！";
+
+    faceCascade = new cv.CascadeClassifier();
+    smileCascade = new cv.CascadeClassifier();
+    const faceUrl = "https://cdn.jsdelivr.net/gh/opencv/opencv@4.8.0/data/haarcascades/haarcascade_frontalface_default.xml";
+    const smileUrl = "https://cdn.jsdelivr.net/gh/opencv/opencv@4.8.0/data/haarcascades/haarcascade_smile.xml";
+
+    async function loadCascade(cascade,url){
+        const res = await fetch(url);
+        const buf = await res.arrayBuffer();
+        const arr = new Uint8Array(buf);
+        cv.FS.writeFile("/tmp.xml",arr);
+        cascade.load("/tmp.xml");
+        cv.FS.unlink("/tmp.xml");
+    }
+    await loadCascade(faceCascade,faceUrl);
+    await loadCascade(smileCascade,smileUrl);
+
+    const video = document.getElementById("videoInput");
+    try{
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video:{facingMode:"user"}, audio:false
+        });
+        video.srcObject = stream;
+        video.play();
+        video.addEventListener("playing",()=>{
+            streaming = true;
+            processVideo();
+            document.getElementById("tip").innerText = "📷摄像头已开启，实时检测中";
+        })
+    }catch(err){
+        document.getElementById("tip").innerText = "❌获取摄像头失败，请授予相机权限，必须HTTPS环境";
+        console.error(err);
+    }
+};
+
+const video = document.getElementById("videoInput");
+const canvas = document.getElementById("canvasOutput");
+let cap, src, gray;
+const FPS = 22;
+
+function processVideo(){
+    if(!streaming){
+        if(src) src.delete();
+        if(gray) gray.delete();
+        return;
+    }
+    const begin = Date.now();
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    if(!cap) cap = new cv.VideoCapture(video);
+    if(!src) src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
+    if(!gray) gray = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC1);
+
+    cap.read(src);
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+    const faces = new cv.RectVector();
+    // 和你Python摄像头代码参数完全保持一致
+    faceCascade.detectMultiScale(gray, faces, 1.1, 5, 0, new cv.Size(100,100));
+
+    for(let i=0;i<faces.size();i++){
+        const rect = faces.get(i);
+        const p1 = new cv.Point(rect.x, rect.y);
+        const p2 = new cv.Point(rect.x+rect.width, rect.y+rect.height);
+        cv.rectangle(src, p1, p2, [0,255,0,255], 2);
+
+        const faceRoi = gray.roi(rect);
+        const smiles = new cv.RectVector();
+        smileCascade.detectMultiScale(faceRoi, smiles,1.7,20);
+
+        let text,color;
+        if(smiles.size()>0){
+            text = "Smiling";
+            color = [0,255,0,255];
+        }else{
+            text = "Normal";
+            color = [0,0,255,255];
+        }
+        cv.putText(src, text, new cv.Point(rect.x, Math.max(rect.y‑10,20)), cv.FONT_HERSHEY_SIMPLEX,0.8,color,2);
+        faceRoi.delete();
+        smiles.delete();
+    }
+    cv.imshow("canvasOutput", src);
+    faces.delete();
+
+    const delay = 1000/FPS - (Date.now()-begin);
+    setTimeout(processVideo, delay);
+}
+</script>
+</body>
+</html>
